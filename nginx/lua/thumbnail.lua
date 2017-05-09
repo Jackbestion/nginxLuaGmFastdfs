@@ -51,10 +51,16 @@ if (file_exists(originFileName))
         local somefile = ngx.var.image_dir .. preName .. "." .. suffix
         os.execute("echo somefile=" .. somefile .. " > /opt/nginx/conf/lua/lualog.txt")
 
-
-
         os.execute(command)
-        ngx.redirect(ngx.var.uri)
+
+        -- 线上环境，生成新图片后，需要重定向至cdn源站，否则将会引起cdn无限制重定向到自身
+        local targetUrl = ngx.var.scheme .. "://src.shuqucdn.com" .. ngx.var.uri
+        os.execute("echo targetUrl=" .. targetUrl .. " > /opt/nginx/conf/lua/lualog.txt")
+        ngx.redirect(targetUrl)
+
+        -- 日常环境无需重定向到源站，只需要重定向到原始路径即可
+        --ngx.redirect(ngx.var.uri)
+
     else
         ngx.redirect("/404")
 end
