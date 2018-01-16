@@ -1,0 +1,303 @@
+LNMP搭建流程
+环境：centos6.4
+软件版本：
+	nginx-1.7.12
+	mysql-5.5.43
+	php-5.4.40
+说明：nginx版本选择最好选择最新的版本，mysql推荐使用5.1和5.5版本，php推荐使用5.3版本和5.4版本。此流程为编译安装方便后期维护。
+
+一、安装nginx：
+
+1、解决依赖关系
+
+编译安装nginx需要事先需要安装开发包组"Development Tools"和 "Development Libraries"。同时，还需要专门安装pcre-devel包：
+# yum -y install pcre-devel
+
+2、安装
+
+首先添加用户nginx，实现以之运行nginx服务进程：
+# groupadd -r nginx
+# useradd -r -g nginx nginx
+
+开始编译和安装：
+# ./configure --prefix=/usr/local/nginx --sbin-path=/usr/local/nginx/sbin/nginx --conf-path=/usr/local/nginx/conf/nginx.conf --error-log-path=/usr/local/nginx/logs/error.log  --pid-path=/usr/local/nginx/logs/nginx.pid --lock-path=/var/lock/subsys/nginx --user=nginx --group=nginx --with-http_ssl_module --with-http_flv_module --with-http_gzip_static_module --http-log-path=/usr/local/nginx/logs/access.log --http-client-body-temp-path=/var/tmp/nginx/client/ --http-proxy-temp-path=/var/tmp/nginx/proxy/ --http-fastcgi-temp-path=/var/tmp/nginx/fcgi/ --with-http_stub_status_module --with-pcre --add-module=/root/nginx/nginx_upstream_check_module-master --add-module=/root/nginx/ngx_cache_purge-2.1
+# make && make install
+
+说明：--add-module=/root/nginx/nginx_upstream_check_module-master --add-module=/root/nginx/ngx_cache_purge-2.1 这两个模块可以不用添加，前者是检测后端的健康状态，后者是做缓冲使用，如果使用参考网上的文档
+
+3、准备启动脚本：
+cat /etc/inint.d/nginx
+#!/bin/sh
+#
+# nginx - this script starts and stops the nginx daemon
+#
+# chkconfig:   - 85 15 
+# description:  Nginx is an HTTP(S) server, HTTP(S) reverse \
+#               proxy and IMAP/POP3 proxy server
+# processname: nginx
+# config:      /usr/local/nginx/nginx.conf
+# config:      /etc/sysconfig/nginx
+# pidfile:     /usr/local/nginx/logs/nginx.pid
+ 
+# Source function library.
+. /etc/rc.d/init.d/functions
+ 
+# Source networking configuration.
+. /etc/sysconfig/network
+ 
+# Check that networking is up.
+[ "$NETWORKING" = "no" ] && exit 0
+ 
+nginx="/usr/local/nginx/sbin/nginx"
+prog=$(basename $nginx)
+ 
+NGINX_CONF_FILE="/usr/local/nginx/conf/nginx.conf"
+ 
+[ -f /etc/sysconfig/nginx ] && . /etc/sysconfig/nginx
+ 
+lockfile=/var/lock/subsys/nginx
+ 
+make_dirs() {
+   # make required directories
+   user=`nginx -V 2>&1 | grep "configure arguments:" | sed 's/[^*]*--user=\([^ ]*\).*/\1/g' -`
+   options=`$nginx -V 2>&1 | grep 'configure arguments:'`
+   for opt in $options; do
+       if [ `echo $opt | grep '.*-temp-path'` ]; then
+           value=`echo $opt | cut -d "=" -f 2`
+           if [ ! -d "$value" ]; then
+               # echo "creating" $value
+               mkdir -p $value && chown -R $user $value
+           fi
+       fi
+   done
+}
+ 
+start() {
+    [ -x $nginx ] || exit 5
+    [ -f $NGINX_CONF_FILE ] || exit 6
+    make_dirs
+    echo -n $"Starting $prog: "
+    daemon $nginx -c $NGINX_CONF_FILE
+    retval=$?
+    echo
+    [ $retval -eq 0 ] && touch $lockfile
+    return $retval
+}
+ 
+stop() {
+    echo -n $"Stopping $prog: "
+    killproc $prog -QUIT
+    retval=$?
+    echo
+    [ $retval -eq 0 ] && rm -f $lockfile
+    return $retval
+}
+ 
+restart() {
+    configtest || return $?
+    stop
+    sleep 1
+    start
+}
+ 
+reload() {
+    configtest || return $?
+    echo -n $"Reloading $prog: "
+    killproc $nginx -HUP
+    RETVAL=$?
+    echo
+}
+ 
+force_reload() {
+    restart
+}
+ 
+configtest() {
+  $nginx -t -c $NGINX_CONF_FILE
+}
+ 
+rh_status() {
+    status $prog
+}
+ 
+rh_status_q() {
+    rh_status >/dev/null 2>&1
+}
+ 
+case "$1" in
+    start)
+        rh_status_q && exit 0
+        $1
+        ;;
+    stop)
+        rh_status_q || exit 0
+        $1
+        ;;
+    restart|configtest)
+        $1
+        ;;
+    reload)
+        rh_status_q || exit 7
+        $1
+        ;;
+    force-reload)
+        force_reload
+        ;;
+    status)
+        rh_status
+        ;;
+    condrestart|try-restart)
+        rh_status_q || exit 0
+            ;;
+    *)
+        echo $"Usage: $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload|configtest}"
+        exit 2
+esac
+
+为此脚本赋予执行权限：
+#chmod +x nginx
+
+添加至服务管理列表，并让其开机自动启动：
+# chkconfig --add nginx
+# chkconfig nginx on
+
+启动服务：
+# service nginx start
+
+二、安装mysql-5.5.43
+
+说明:由于mysql5.5版本和5.1版本有部分区别，偶尔会出现创建数据库主从的时候会报错，建议创建主从的时候尽量主从数据库版本一致
+
+创建用户和数据目录：
+# mkdir -pv /mydata/data
+# groupadd -r mysql
+# useradd -g mysql -r -s /sbin/nologin -M -d /mydata/data mysql
+# chown -R mysql:mysql /mydata/data
+
+安装并初始化数据库：
+# tar xf mysql-5.5.43-linux2.6-x86_64.tar -C /usr/local
+# cd /usr/local/
+# ln -sv mysql-5.5.43-linux2.6-x86_64  mysql
+# cd mysql 
+
+# chown -R mysql:mysql  .
+# scripts/mysql_install_db --user=mysql --datadir=/mydata/data
+# chown -R root  .
+
+为mysql提供主配置文件：
+# cd /usr/local/mysql
+# cp support-files/my-large.cnf  /etc/my.cnf
+
+并修改此文件中thread_concurrency的值为你的CPU个数乘以2
+
+另外还需要添加如下行指定mysql数据文件的存放位置：
+datadir = /mydata/data
+
+为mysql提供服务脚本：
+# cd /usr/local/mysql
+# cp support-files/mysql.server  /etc/rc.d/init.d/mysqld
+
+添加至服务列表：
+# chkconfig --add mysqld
+# chkconfig mysqld on
+
+接下来就可以启动服务测试使用
+说明：为了使mysql的安装符合系统使用规范，并且让其部分开发文件让系统使用，需要进行如下配置：
+
+编辑/etc/man.config，添加如下行即可：
+MANPATH  /usr/local/mysql/man
+
+修改PATH环境变量，方便系统使用其命令
+# vim /etc/profile.d/mysql.sh
+PATH=$PATH:/usr/local/mysql/bin
+# ln -sv /usr/local/mysql/include  /usr/include/mysql
+# echo '/usr/local/mysql/lib' > /etc/ld.so.conf.d/mysql.conf
+# ldconfig
+
+三、编译安装php-5.4.40
+
+说明：如果想让编译的php支持mcrypt、mhash扩展和libevent，首先需要安装对应的软件包，此处用yum安装：
+# yum install libmcrypt libmcrypt-devel mhash mhash-devel mcrypt libevent libevent-devel gd gdbm gdbm-devel gdb
+
+编译安装php-5.4.40
+# tar -xvf php-5.4.40.tar
+# cd php-5.4.40
+# ./configure --prefix=/usr/local/php --with-mysql=/usr/local/mysql --with-openssl --enable-fpm --enable-sockets --enable-sysvshm  --with-mysqli=/usr/local/mysql/bin/mysql_config --enable-mbstring --with-freetype-dir --with-jpeg-dir --with-png-dir --with-zlib-dir --with-libxml-dir=/usr --enable-xml  --with-mhash --with-mcrypt  --with-config-file-path=/etc --with-config-file-scan-dir=/etc/php.d --with-bz2 --with-curl --with-gdbm --with-gd --enable-gd-native-ttf --enable-gd-jis-conv
+
+说明：如果前面第1步解决依赖关系时安装mcrypt相关的两个rpm包，此./configure命令还可以带上--with-mcrypt选项以让php支持mycrpt扩展。--with-snmp选项则用于实现php的SNMP扩展，但此功能要求提前安装net-snmp相关软件包。
+
+# make
+# make test
+# make install
+
+为php提供配置文件：
+# cp php.ini-production /etc/php.ini
+
+为php-fpm提供服务脚本，并将其添加至服务列表：
+# cp sapi/fpm/init.d.php-fpm  /etc/rc.d/init.d/php-fpm
+# chmod +x /etc/rc.d/init.d/php-fpm
+# chkconfig --add php-fpm
+# chkconfig php-fpm on
+
+为php-fpm提供配置文件：
+# cp /usr/local/php/etc/php-fpm.conf.default /usr/local/php/etc/php-fpm.conf 
+
+编辑php-fpm的配置文件：
+# vim /usr/local/php/etc/php-fpm.conf
+配置fpm的相关选项为你所需要的值，并启用pid文件（如下最后一行）：
+pm.max_children = *
+pm.start_servers = *
+pm.min_spare_servers = *
+pm.max_spare_servers = *
+pid = /usr/local/php/var/run/php-fpm.pid 
+
+接下来就可以启动php-fpm了：
+# service php-fpm start
+
+四、整合nginx和php：
+
+1、编辑/etc/nginx/nginx.conf，启用如下选项：
+location ~ \.php$ {
+            root           html;
+            fastcgi_pass   127.0.0.1:9000;
+            fastcgi_index  index.php;
+            fastcgi_param  SCRIPT_FILENAME  /scripts$fastcgi_script_name;
+            include        fastcgi_params;
+        }
+说明：nginx可以实现和php-fpm以及mysql分布在不通服务器上
+
+2、编辑/etc/nginx/fastcgi_params，将其内容更改为如下内容：
+fastcgi_param  GATEWAY_INTERFACE  CGI/1.1;
+fastcgi_param  SERVER_SOFTWARE    nginx;
+fastcgi_param  QUERY_STRING       $query_string;
+fastcgi_param  REQUEST_METHOD     $request_method;
+fastcgi_param  CONTENT_TYPE       $content_type;
+fastcgi_param  CONTENT_LENGTH     $content_length;
+fastcgi_param  SCRIPT_FILENAME    $document_root$fastcgi_script_name;
+fastcgi_param  SCRIPT_NAME        $fastcgi_script_name;
+fastcgi_param  REQUEST_URI        $request_uri;
+fastcgi_param  DOCUMENT_URI       $document_uri;
+fastcgi_param  DOCUMENT_ROOT      $document_root;
+fastcgi_param  SERVER_PROTOCOL    $server_protocol;
+fastcgi_param  REMOTE_ADDR        $remote_addr;
+fastcgi_param  REMOTE_PORT        $remote_port;
+fastcgi_param  SERVER_ADDR        $server_addr;
+fastcgi_param  SERVER_PORT        $server_port;
+fastcgi_param  SERVER_NAME        $server_name;
+
+并在所支持的主页面格式中添加php格式的主页，类似如下：
+location / {
+            root   html;
+            index  index.php index.html index.htm;
+        }
+        
+而后重新载入nginx的配置文件：
+# service nginx reload
+
+3、在/usr/html新建index.php的测试页面，测试php是否能正常工作：
+# cat > /usr/local/nginx/html/index.php << EOF
+<?php
+phpinfo();
+?>
+
+Edit 2015-04-24
